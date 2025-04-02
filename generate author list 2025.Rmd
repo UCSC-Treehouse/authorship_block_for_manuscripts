@@ -1,0 +1,131 @@
+---
+title: "`r gsub('.Rmd', ' ', gsub('_', ' ', knitr::current_input()))`"
+author: "`r Sys.getenv('USER')`"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output:
+  html_document:
+    toc: yes
+---
+  
+# How to use
+create an input file using "author_input_data.tsv" as a template. It must include these columns:
+
+* order
+* shared author position	
+* Author	
+* Affiliation
+
+When authors have multiple affiliations, they should all be listed in the "Affiliation" column separated by semicolons 
+
+Because many authors are from the same institution, you can have default suffix to avoid repeating the university and city in affiliations. In that case, if "USA" is not in the affiliation, the default suffix is added. This logic is insufficient for international collaborations.
+
+
+# Improvements I'd like to see 
+- Determining whether an affiliation is incomplete by looking for "USA" in an affiliation is inadequate for non-US authors. 
+- Fails if there are no "co-first" authors
+- Add support for "co-senior" authors
+
+
+
+# Setup
+```{r setup}
+
+library(tidyverse)
+
+```
+
+# Variable assignments you might want to modify
+```{r}
+
+default_city_etc <- ", University of California Santa Cruz, Santa Cruz, California, USA"
+
+```
+
+# Import data
+```{r}
+
+author_input_data <- read_tsv("author_input_data.tsv")
+
+```
+
+# split and annotate affiliations
+```{r}
+
+affiliations_raw <- author_input_data %>%
+  arrange(order) %>%
+  rename(Affiliation_text_raw = Affiliation) %>%
+  mutate(single_affiliation = str_split(Affiliation_text_raw, ";")) %>%
+  unnest(single_affiliation)
+
+long_and_short_affiliations <- affiliations_raw %>%
+  mutate(single_affiliation = str_trim(single_affiliation)) %>%
+  distinct() %>%
+  mutate(
+    single_affiliation = case_when(
+      str_detect(single_affiliation, "USA$") ~ str_trim(single_affiliation),
+      TRUE ~ paste0(str_trim(single_affiliation), default_city_etc))) %>%
+  select(single_affiliation, Affiliation_text_raw)
+
+affiliation_nums <- long_and_short_affiliations %>%
+  select(single_affiliation) %>%
+  distinct() %>%
+  mutate(affiliation_num = 1:n())
+```
+
+# generate affiliation code text for manuscript
+```{r comment = NA}
+
+affiliation_nums %>%
+  mutate(affiliation_text = paste0(affiliation_num, ". ", single_affiliation)) %>%
+  pull(affiliation_text) %>%
+  paste(collapse = "\n") %>%
+  cat
+```
+
+# Create annotated author list
+* annotate author name with co-first indicators
+* combine author info with annotated affiliations
+* annotate author names with numeric affiliation code
+
+
+```{r}
+
+author_input_data_with_author_pos_anno <-  author_input_data %>%
+  mutate(author_pos_anno = ifelse(`shared author position` == "co-first",
+                                  ",*",
+                                  NA)) %>%
+  replace_na(list(author_pos_anno = ""))
+
+numbered_long_and_short_affiliations <- left_join(long_and_short_affiliations,
+          affiliation_nums, 
+          by = "single_affiliation")
+
+full_author_entry_expanded <- left_join(author_input_data_with_author_pos_anno %>%
+            select(order, Author, Affiliation, author_pos_anno),
+          numbered_long_and_short_affiliations %>% distinct(),
+          by=c("Affiliation"="Affiliation_text_raw")) %>%
+  arrange(order, affiliation_num) %>% 
+  group_by(Author, order, author_pos_anno) %>%
+  summarize(author_affiliation_numbers = paste(affiliation_num, collapse = ","),
+            full_author_entry = paste0(Author, " (", author_affiliation_numbers, author_pos_anno, ")")) %>%
+  arrange(order)
+
+```
+
+
+# Output author list for manuscript
+```{r comment = NA}
+
+full_author_entry_expanded %>%
+  pull(full_author_entry) %>%
+  unique() %>%
+  paste(collapse = ", ") %>%
+  cat
+
+```
+
+
+```{r}
+sessioninfo::session_info()
+```
+
